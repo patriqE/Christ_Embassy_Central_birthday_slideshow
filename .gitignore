@@ -1,0 +1,19 @@
+# Credentials - never commit this
+service_account.json
+
+# Virtual environment
+venv/
+.venv/
+
+# Generated output (rebuilt fresh each run)
+_build/
+output/
+fonts/*.ttf
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS junk
+.DS_Store
+Thumbs.db
