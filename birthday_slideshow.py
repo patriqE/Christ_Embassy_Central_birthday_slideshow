@@ -322,93 +322,178 @@ def wrap_text_to_fit(draw, text, font_path, max_width, start_size, min_size=40):
     return ImageFont.truetype(font_path, min_size)
 
 
-PHOTO_FRACTION = 0.62  # how much of the frame width the photo takes up
+# --------------------------------------------------------------------------
+# LIQUID GLASS SLIDE DESIGN
+# --------------------------------------------------------------------------
+def rounded_mask(size, radius):
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius=radius, fill=255)
+    return mask
+
+
+def glass_panel(base_rgba, box, radius=40, blur=35, tint=(255, 255, 255, 70), border=(255, 255, 255, 130)):
+    """Cut a region out of base_rgba, blur it, tint it white, round its corners,
+    add a soft border and a drop shadow - the frosted-glass card effect."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+
+    # drop shadow first (blurred dark rounded rect, offset down)
+    shadow = Image.new("RGBA", base_rgba.size, (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shadow)
+    sdraw.rounded_rectangle((x0, y0 + 18, x1, y1 + 18), radius=radius, fill=(0, 0, 0, 110))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(28))
+    base_rgba.alpha_composite(shadow)
+
+    # blurred crop of what's behind the card = the "frosted" look
+    crop = base_rgba.crop(box).convert("RGB").filter(ImageFilter.GaussianBlur(blur))
+    crop = crop.convert("RGBA")
+    tint_layer = Image.new("RGBA", crop.size, tint)
+    frosted = Image.alpha_composite(crop, tint_layer)
+
+    mask = rounded_mask((w, h), radius)
+    base_rgba.paste(frosted, (x0, y0), mask)
+
+    # border stroke
+    draw = ImageDraw.Draw(base_rgba, "RGBA")
+    draw.rounded_rectangle(box, radius=radius, outline=border, width=2)
+    # top highlight sliver (light catching the top edge of the glass)
+    draw.arc((x0 + 4, y0 + 2, x0 + 60, y0 + 60), start=180, end=270, fill=(255, 255, 255, 180), width=3)
+
+    return base_rgba
+
+
+def glow_text(base_rgba, xy, text, font, glow_color=(255, 220, 130, 140), radius=14):
+    layer = Image.new("RGBA", base_rgba.size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).text(xy, text, font=font, fill=glow_color)
+    layer = layer.filter(ImageFilter.GaussianBlur(radius))
+    base_rgba.alpha_composite(layer)
+
+
+def contain_fit(img, max_w, max_h):
+    """Resize an image to fit fully WITHIN max_w x max_h, preserving aspect
+    ratio and cropping nothing - the whole photo stays visible (head to toe)."""
+    src_w, src_h = img.size
+    scale = min(max_w / src_w, max_h / src_h)
+    new_w, new_h = max(1, int(src_w * scale)), max(1, int(src_h * scale))
+    return img.resize((new_w, new_h), Image.LANCZOS)
 
 
 def make_slide(person, index, total, out_path):
     c1, c2 = BG_COLORS[index % len(BG_COLORS)]
+    has_photo = bool(person["photo"] and os.path.exists(person["photo"]))
 
-    photo_w = int(WIDTH * PHOTO_FRACTION)
-    panel_w = WIDTH - photo_w
+    if has_photo:
+        photo = Image.open(person["photo"]).convert("RGB")
 
-    img = Image.new("RGB", (WIDTH, HEIGHT))
+        # Backdrop: a heavily blurred, darkened "cover" crop of the same photo,
+        # filling the whole frame - just soft ambient color, never the main subject.
+        backdrop = cover_crop(photo, WIDTH, HEIGHT).filter(ImageFilter.GaussianBlur(60))
+        base = backdrop.convert("RGBA")
+        darken = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 90))
+        base.alpha_composite(darken)
 
-    if person["photo"] and os.path.exists(person["photo"]):
-        photo_img = big_photo_panel(person["photo"], photo_w, HEIGHT)
+        # The actual photo: fit fully inside the frame, nothing cropped off,
+        # centered. This is what keeps heads/faces fully visible top to bottom.
+        fitted = contain_fit(photo, WIDTH, HEIGHT - 40).convert("RGBA")
+        fx = (WIDTH - fitted.width) // 2
+        fy = (HEIGHT - fitted.height) // 2
+        # soft shadow behind the photo so it lifts off the blurred backdrop
+        shadow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rectangle(
+            (fx + 8, fy + 8, fx + fitted.width + 8, fy + fitted.height + 8), fill=(0, 0, 0, 100))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(24))
+        base.alpha_composite(shadow)
+        base.alpha_composite(fitted, (fx, fy))
     else:
-        photo_img = big_initials_panel(person["name"], photo_w, HEIGHT, c1, c2)
-    img.paste(photo_img, (0, 0))
+        base = make_gradient((WIDTH, HEIGHT), c1, c2, vertical=True).convert("RGBA")
+        draw0 = ImageDraw.Draw(base, "RGBA")
+        initials = "".join(w[0].upper() for w in person["name"].split()[:2])
+        big_font = ImageFont.truetype(FONT_BOLD, 520)
+        bbox = draw0.textbbox((0, 0), initials, font=big_font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        draw0.text((WIDTH - tw - 60 - bbox[0], 40 - bbox[1]), initials, font=big_font,
+                    fill=(255, 255, 255, 40))
 
-    panel_img = make_gradient((panel_w, HEIGHT), c1, c2, vertical=True)
-    img.paste(panel_img, (photo_w, 0))
+    # --- Glass card, tucked into the bottom-left corner (not spanning the whole
+    # width) so the photo itself stays fully visible ---
+    margin = 60
+    card_w = 640
+    card_h = 360
+    card_box = (margin, HEIGHT - card_h - margin, margin + card_w, HEIGHT - margin)
+    base = glass_panel(base, card_box, radius=36, blur=34)
 
-    img = img.convert("RGBA")
-    draw = ImageDraw.Draw(img, "RGBA")
-    draw_confetti(draw, count=40, seed=index, x_range=(photo_w, WIDTH))
+    draw = ImageDraw.Draw(base, "RGBA")
+    pad = 42
+    text_x = card_box[0] + pad
+    text_max_w = card_w - pad * 2
 
-    draw.rectangle((photo_w - 6, 0, photo_w, HEIGHT), fill=(255, 255, 255, 200))
-
-    panel_margin = 70
-    text_x = photo_w + panel_margin
-    text_max_w = panel_w - panel_margin * 2
-
-    banner_font = ImageFont.truetype(FONT_BOLD, 46)
+    banner_font = ImageFont.truetype(FONT_MEDIUM, 26)
     name_font, name_lines = fit_multiline(draw, person["name"], FONT_BOLD, text_max_w,
-                                           start_size=88, min_size=40, max_lines=3)
-    cell_font = ImageFont.truetype(FONT_REGULAR, 34)
-    date_font = ImageFont.truetype(FONT_MEDIUM, 50)
+                                           start_size=52, min_size=28, max_lines=3)
+    cell_font = ImageFont.truetype(FONT_REGULAR, 24)
+    date_font = ImageFont.truetype(FONT_MEDIUM, 32)
 
-    def line_h(font, text="Ag"):
-        bbox = draw.textbbox((0, 0), text, font=font)
-        return bbox[3] - bbox[1]
+    cursor_y = card_box[1] + 30
 
-    banner_h = line_h(banner_font)
-    name_line_h = line_h(name_font)
-    cell_h = line_h(cell_font) if person.get("cell_unit") else 0
-    date_h = line_h(date_font)
+    # "HAPPY BIRTHDAY" small glass pill badge
+    badge_text = "HAPPY BIRTHDAY"
+    bbox = draw.textbbox((0, 0), badge_text, font=banner_font)
+    bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    badge_pad_x, badge_pad_y = 16, 9
+    badge_box = (text_x, cursor_y, text_x + bw + badge_pad_x * 2, cursor_y + bh + badge_pad_y * 2)
+    base = glass_panel(base, badge_box, radius=badge_box[3] - badge_box[1], blur=16,
+                        tint=(255, 210, 120, 90), border=(255, 224, 130, 200))
+    draw = ImageDraw.Draw(base, "RGBA")
+    draw.text((text_x + badge_pad_x, cursor_y + badge_pad_y - bbox[1]), badge_text,
+               font=banner_font, fill="#3a2a00")
+    cursor_y = badge_box[3] + 20
 
-    gap_banner_name = 40
-    gap_name_lines = 12
-    gap_name_cell = 26
-    gap_cell_date = 34
-
-    total_h = banner_h + gap_banner_name
-    total_h += name_line_h * len(name_lines) + gap_name_lines * (len(name_lines) - 1)
-    if person.get("cell_unit"):
-        total_h += gap_name_cell + cell_h
-    total_h += gap_cell_date + date_h
-
-    cursor_y = (HEIGHT - total_h) / 2
-
-    def draw_left(text, font, fill):
-        nonlocal cursor_y
-        bbox = draw.textbbox((0, 0), text, font=font)
-        draw.text((text_x, cursor_y - bbox[1]), text, font=font, fill=fill)
-        cursor_y += (bbox[3] - bbox[1])
-
-    draw_left("HAPPY BIRTHDAY!", banner_font, "white")
-    cursor_y += gap_banner_name
-
+    # Name with soft glow
     for i, line in enumerate(name_lines):
-        draw_left(line, name_font, "white")
-        cursor_y += gap_name_lines if i < len(name_lines) - 1 else 0
+        glow_text(base, (text_x, cursor_y), line, name_font, glow_color=(255, 255, 255, 90), radius=8)
+        draw = ImageDraw.Draw(base, "RGBA")
+        bbox = draw.textbbox((0, 0), line, font=name_font)
+        draw.text((text_x + 2, cursor_y + 2), line, font=name_font, fill=(0, 0, 0, 60))
+        draw.text((text_x, cursor_y), line, font=name_font, fill="white")
+        cursor_y += (bbox[3] - bbox[1]) + 6
 
+    cursor_y += 10
     if person.get("cell_unit"):
-        cursor_y += gap_name_cell
-        draw_left(person["cell_unit"], cell_font, (255, 255, 255, 220))
+        cell_lines = wrap_lines(draw, person["cell_unit"], cell_font, text_max_w)
+        for line in cell_lines[:2]:
+            draw.text((text_x, cursor_y), line, font=cell_font, fill=(255, 255, 255, 210))
+            bbox = draw.textbbox((0, 0), line, font=cell_font)
+            cursor_y += (bbox[3] - bbox[1]) + 6
+        cursor_y += 14
 
-    cursor_y += gap_cell_date
+    # Date as its own small glass chip
     date_text = f"{MONTH_NAMES[person['month']]} {person['day']}"
-    draw_left(date_text, date_font, "#FFE066")
+    bbox = draw.textbbox((0, 0), date_text, font=date_font)
+    dw, dh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    chip_pad_x, chip_pad_y = 20, 12
+    chip_box = (text_x, cursor_y, text_x + dw + chip_pad_x * 2, cursor_y + dh + chip_pad_y * 2)
+    base = glass_panel(base, chip_box, radius=chip_box[3] - chip_box[1], blur=16,
+                        tint=(255, 255, 255, 60), border=(255, 255, 255, 160))
+    draw = ImageDraw.Draw(base, "RGBA")
+    draw.text((text_x + chip_pad_x, cursor_y + chip_pad_y - bbox[1]), date_text,
+               font=date_font, fill="white")
 
-    page_font = ImageFont.truetype(FONT_REGULAR, 30)
-    page_text = f"{index + 1} / {total}"
-    bbox = draw.textbbox((0, 0), page_text, font=page_font)
-    pw = bbox[2] - bbox[0]
-    draw.text((WIDTH - panel_margin - pw, HEIGHT - 60), page_text, font=page_font,
-               fill=(255, 255, 255, 180))
+    # dot indicators, top-right of frame
+    dot_r = 6
+    dot_gap = 22
+    dots_w = total * dot_gap
+    dot_start_x = WIDTH - margin - dots_w
+    dot_y = 50
+    for i in range(total):
+        cx = dot_start_x + i * dot_gap
+        if i == index:
+            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), fill="#FFE066")
+        else:
+            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r),
+                          outline=(255, 255, 255, 200), width=2)
 
-    img.convert("RGB").save(out_path, quality=95)
+    base.convert("RGB").save(out_path, quality=95)
+
 
 
 # --------------------------------------------------------------------------
