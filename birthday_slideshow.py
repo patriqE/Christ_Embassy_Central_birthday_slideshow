@@ -499,10 +499,23 @@ def make_slide(person, index, total, out_path):
 # --------------------------------------------------------------------------
 # NARRATION (TTS)
 # --------------------------------------------------------------------------
+def spoken_cell_name(cell_unit):
+    """
+    'Johnson' -> 'Johnson Cell'   (word "cell" not already present, so add it)
+    'Johnson Cell' -> 'Johnson Cell'   (already there, don't double it up)
+    'Cell Group 4 - Grace' -> 'Cell Group 4 - Grace'   (already there, anywhere in the phrase)
+    """
+    import re
+    if re.search(r"\bcell\b", cell_unit, re.IGNORECASE):
+        return cell_unit
+    return f"{cell_unit} Cell"
+
+
 def narration_text(person):
     date_part = f"born on {MONTH_NAMES[person['month']]} {person['day']}"
     if person.get("cell_unit"):
-        return f"Happy birthday to {person['name']}, from {person['cell_unit']}, {date_part}."
+        cell_spoken = spoken_cell_name(person["cell_unit"])
+        return f"Happy birthday to {person['name']}, from {cell_spoken}, {date_part}."
     return f"Happy birthday to {person['name']}, {date_part}."
 
 
