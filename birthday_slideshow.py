@@ -143,6 +143,7 @@ SLIDES_DIR = WORKDIR / "_build" / "slides"
 AUDIO_DIR = WORKDIR / "_build" / "audio"
 CLIPS_DIR = WORKDIR / "_build" / "clips"
 OUTPUT_DIR = WORKDIR / "output"
+OPENING_BACKGROUND = WORKDIR / "assets" / "branding" / "opening_background.jpg"
 
 MONTH_NAMES = list(calendar.month_name)  # index 1-12
 
@@ -609,18 +610,31 @@ def build_clip(image_path, audio_path, out_path):
 
 
 def make_title_slide(month_label, total, out_path):
-    base = make_gradient((WIDTH, HEIGHT), "#10243A", "#D28B42", vertical=False).convert("RGBA")
+    if OPENING_BACKGROUND.exists():
+        base = cover_crop(Image.open(OPENING_BACKGROUND).convert("RGB"), WIDTH, HEIGHT).convert("RGBA")
+        # Paint over the template wording while preserving the decorative frame.
+        draw_cover = ImageDraw.Draw(base, "RGBA")
+        draw_cover.rounded_rectangle((535, 205, 1485, 855), radius=18,
+                                     fill=(166, 195, 195, 235))
+    else:
+        base = make_gradient((WIDTH, HEIGHT), "#10243A", "#D28B42", vertical=False).convert("RGBA")
     draw = ImageDraw.Draw(base, "RGBA")
     draw_confetti(draw, count=85, seed=total * 17)
-    title_font = ImageFont.truetype(FONT_BOLD, 112)
-    subtitle_font = ImageFont.truetype(FONT_MEDIUM, 42)
-    title = f"{month_label.upper()} BIRTHDAYS"
-    bbox = draw.textbbox((0, 0), title, font=title_font)
-    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 360), title, font=title_font, fill="white")
-    subtitle = f"Celebrating {total} special {'' if total == 1 else 'people'}"
-    bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
-    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 510), subtitle, font=subtitle_font, fill="#FFE08A")
-    draw.line((WIDTH // 2 - 120, 590, WIDTH // 2 + 120, 590), fill="#FFE08A", width=5)
+    church_font = ImageFont.truetype(FONT_BOLD, 92)
+    location_font = ImageFont.truetype(FONT_MEDIUM, 48)
+    range_font = ImageFont.truetype(FONT_BOLD, 62)
+    count_font = ImageFont.truetype(FONT_MEDIUM, 42)
+
+    def centered(text, font, y, fill):
+        bbox = draw.textbbox((0, 0), text, font=font)
+        draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, y), text, font=font, fill=fill)
+
+    centered("CHRIST EMBASSY", church_font, 300, "white")
+    centered("PARIS CENTRAL", location_font, 420, "#FFE08A")
+    centered(f"{month_label.upper()}", range_font, 520, "white")
+    centered("CELEBRANTS", range_font, 595, "white")
+    centered(f"Celebrating {total} celebrant{'s' if total != 1 else ''}", count_font, 705, "#FFE08A")
+    draw.line((WIDTH // 2 - 150, 790, WIDTH // 2 + 150, 790), fill="#FFE08A", width=5)
     base.convert("RGB").save(out_path, quality=95)
 
 
