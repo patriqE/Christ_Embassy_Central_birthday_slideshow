@@ -163,7 +163,8 @@ def month_to_number(value: str) -> int:
     raise ValueError(f"Could not parse month: {value}")
 
 
-def load_celebrants(csv_path: str, target_month: int):
+def load_celebrants(csv_path: str, target_month: int = None, target_months=None):
+    selected_months = set(target_months or ([target_month] if target_month else []))
     people = []
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -173,11 +174,29 @@ def load_celebrants(csv_path: str, target_month: int):
             month = month_to_number(row["month"])
             photo = (row.get("photo") or "").strip()
             cell_unit = (row.get("cell_unit") or "").strip()
-            if month == target_month:
+            if month in selected_months:
                 people.append({"name": name, "day": day, "month": month,
                                 "photo": photo or None, "cell_unit": cell_unit or None})
-    people.sort(key=lambda p: p["day"])
+    people.sort(key=lambda p: (p["month"], p["day"]))
     return people
+
+
+def parse_months(month_value, months_value):
+    """Parse either one month or a comma-separated month list."""
+    if months_value:
+        values = [part.strip() for part in months_value.split(",") if part.strip()]
+    elif month_value:
+        values = [month_value]
+    else:
+        values = [str(datetime.now().month)]
+    if not values:
+        raise ValueError("At least one month is required")
+    result = []
+    for value in values:
+        number = month_to_number(value)
+        if number not in result:
+            result.append(number)
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -378,32 +397,47 @@ def contain_fit(img, max_w, max_h):
     return img.resize((new_w, new_h), Image.LANCZOS)
 
 
+def open_oriented_photo(path):
+    """Apply camera EXIF orientation before rendering a downloaded photo."""
+    with Image.open(path) as source:
+        orientation = source.getexif().get(274, 1)
+        transpose_methods = {
+            2: Image.Transpose.FLIP_LEFT_RIGHT,
+            3: Image.Transpose.ROTATE_180,
+            4: Image.Transpose.FLIP_TOP_BOTTOM,
+            5: Image.Transpose.TRANSPOSE,
+            6: Image.Transpose.ROTATE_270,
+            7: Image.Transpose.TRANSVERSE,
+            8: Image.Transpose.ROTATE_90,
+        }
+        if orientation in transpose_methods:
+            return source.transpose(transpose_methods[orientation]).convert("RGB")
+        return source.convert("RGB")
+
+
 def make_slide(person, index, total, out_path):
     c1, c2 = BG_COLORS[index % len(BG_COLORS)]
     has_photo = bool(person["photo"] and os.path.exists(person["photo"]))
 
     if has_photo:
-        photo = Image.open(person["photo"]).convert("RGB")
-
-        # Backdrop: a heavily blurred, darkened "cover" crop of the same photo,
-        # filling the whole frame - just soft ambient color, never the main subject.
-        backdrop = cover_crop(photo, WIDTH, HEIGHT).filter(ImageFilter.GaussianBlur(60))
+        photo = open_oriented_photo(person["photo"])
+        # Preserve the complete photo. The blurred cover backdrop fills the
+        # projector frame while the sharp photo is fitted inside it without cropping.
+        backdrop = cover_crop(photo, WIDTH, HEIGHT).filter(ImageFilter.GaussianBlur(46))
         base = backdrop.convert("RGBA")
-        darken = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 90))
-        base.alpha_composite(darken)
-
-        # The actual photo: fit fully inside the frame, nothing cropped off,
-        # centered. This is what keeps heads/faces fully visible top to bottom.
-        fitted = contain_fit(photo, WIDTH, HEIGHT - 40).convert("RGBA")
+        base.alpha_composite(Image.new("RGBA", (WIDTH, HEIGHT), (8, 12, 20, 105)))
+        fitted = contain_fit(photo, WIDTH - 150, HEIGHT - 170).convert("RGBA")
         fx = (WIDTH - fitted.width) // 2
-        fy = (HEIGHT - fitted.height) // 2
-        # soft shadow behind the photo so it lifts off the blurred backdrop
-        shadow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rectangle(
-            (fx + 8, fy + 8, fx + fitted.width + 8, fy + fitted.height + 8), fill=(0, 0, 0, 100))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(24))
-        base.alpha_composite(shadow)
+        fy = 42 + max(0, (HEIGHT - 84 - fitted.height) // 2)
+        photo_shadow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+        ImageDraw.Draw(photo_shadow).rectangle(
+            (fx + 12, fy + 14, fx + fitted.width + 12, fy + fitted.height + 14),
+            fill=(0, 0, 0, 115))
+        base.alpha_composite(photo_shadow.filter(ImageFilter.GaussianBlur(22)))
         base.alpha_composite(fitted, (fx, fy))
+        draw_photo = ImageDraw.Draw(base, "RGBA")
+        draw_photo.rectangle((fx, fy, fx + fitted.width - 1, fy + fitted.height - 1),
+                             outline=(255, 255, 255, 175), width=3)
     else:
         base = make_gradient((WIDTH, HEIGHT), c1, c2, vertical=True).convert("RGBA")
         draw0 = ImageDraw.Draw(base, "RGBA")
@@ -411,86 +445,62 @@ def make_slide(person, index, total, out_path):
         big_font = ImageFont.truetype(FONT_BOLD, 520)
         bbox = draw0.textbbox((0, 0), initials, font=big_font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        draw0.text((WIDTH - tw - 60 - bbox[0], 40 - bbox[1]), initials, font=big_font,
-                    fill=(255, 255, 255, 40))
-
-    # --- Glass card, tucked into the bottom-left corner (not spanning the whole
-    # width) so the photo itself stays fully visible ---
-    margin = 60
-    card_w = 640
-    card_h = 360
-    card_box = (margin, HEIGHT - card_h - margin, margin + card_w, HEIGHT - margin)
-    base = glass_panel(base, card_box, radius=36, blur=34)
+        draw0.text((WIDTH - tw - 80 - bbox[0], 70 - bbox[1]), initials, font=big_font,
+                   fill=(255, 255, 255, 45))
 
     draw = ImageDraw.Draw(base, "RGBA")
-    pad = 42
-    text_x = card_box[0] + pad
-    text_max_w = card_w - pad * 2
+    margin = 76
 
-    banner_font = ImageFont.truetype(FONT_MEDIUM, 26)
-    name_font, name_lines = fit_multiline(draw, person["name"], FONT_BOLD, text_max_w,
-                                           start_size=52, min_size=28, max_lines=3)
-    cell_font = ImageFont.truetype(FONT_REGULAR, 24)
-    date_font = ImageFont.truetype(FONT_MEDIUM, 32)
+    # A dark lower gradient keeps projector text readable without covering the photo.
+    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay, "RGBA")
+    for y in range(HEIGHT // 2, HEIGHT):
+        alpha = int(18 + 175 * ((y - HEIGHT // 2) / (HEIGHT // 2)))
+        overlay_draw.line((0, y, WIDTH, y), fill=(12, 16, 24, alpha))
+    base.alpha_composite(overlay)
 
-    cursor_y = card_box[1] + 30
-
-    # "HAPPY BIRTHDAY" small glass pill badge
-    badge_text = "HAPPY BIRTHDAY"
-    bbox = draw.textbbox((0, 0), badge_text, font=banner_font)
-    bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    badge_pad_x, badge_pad_y = 16, 9
-    badge_box = (text_x, cursor_y, text_x + bw + badge_pad_x * 2, cursor_y + bh + badge_pad_y * 2)
-    base = glass_panel(base, badge_box, radius=badge_box[3] - badge_box[1], blur=16,
-                        tint=(255, 210, 120, 90), border=(255, 224, 130, 200))
+    # Small gold accents make the layout feel celebratory without becoming busy.
     draw = ImageDraw.Draw(base, "RGBA")
-    draw.text((text_x + badge_pad_x, cursor_y + badge_pad_y - bbox[1]), badge_text,
-               font=banner_font, fill="#3a2a00")
-    cursor_y = badge_box[3] + 20
+    draw.ellipse((WIDTH - 150, 76, WIDTH - 128, 98), fill="#FFE08A")
+    draw.ellipse((WIDTH - 112, 58, WIDTH - 98, 72), fill=(255, 255, 255, 190))
+    draw.polygon([(WIDTH - 220, 138), (WIDTH - 212, 158), (WIDTH - 192, 166),
+                  (WIDTH - 212, 174), (WIDTH - 220, 194), (WIDTH - 228, 174),
+                  (WIDTH - 248, 166), (WIDTH - 228, 158)], fill=(255, 224, 138, 210))
+    draw.ellipse((WIDTH - 286, 112, WIDTH - 274, 124), fill=(255, 255, 255, 170))
+    draw.line((margin, HEIGHT - 80, margin + 150, HEIGHT - 80), fill="#FFE08A", width=5)
 
-    # Name with soft glow
-    for i, line in enumerate(name_lines):
-        glow_text(base, (text_x, cursor_y), line, name_font, glow_color=(255, 255, 255, 90), radius=8)
+    banner_font = ImageFont.truetype(FONT_MEDIUM, 28)
+    name_font, name_lines = fit_multiline(draw, person["name"], FONT_BOLD, WIDTH - margin * 2,
+                                           start_size=78, min_size=42, max_lines=2)
+    detail_font = ImageFont.truetype(FONT_REGULAR, 30)
+    date_font = ImageFont.truetype(FONT_MEDIUM, 34)
+    cursor_y = HEIGHT - 330
+
+    month_text = f"{MONTH_NAMES[person['month']].upper()} BIRTHDAYS"
+    draw.text((margin, cursor_y), month_text, font=banner_font, fill="#FFE08A")
+    cursor_y += 48
+    draw.text((margin, cursor_y), "HAPPY BIRTHDAY", font=banner_font, fill=(255, 255, 255, 205))
+    cursor_y += 46
+    for line in name_lines:
+        glow_text(base, (margin, cursor_y), line, name_font, glow_color=(255, 255, 255, 70), radius=10)
         draw = ImageDraw.Draw(base, "RGBA")
+        draw.text((margin, cursor_y), line, font=name_font, fill="white")
         bbox = draw.textbbox((0, 0), line, font=name_font)
-        draw.text((text_x + 2, cursor_y + 2), line, font=name_font, fill=(0, 0, 0, 60))
-        draw.text((text_x, cursor_y), line, font=name_font, fill="white")
-        cursor_y += (bbox[3] - bbox[1]) + 6
+        cursor_y += bbox[3] - bbox[1] + 4
 
-    cursor_y += 10
+    details = [f"{MONTH_NAMES[person['month']]} {person['day']}"]
     if person.get("cell_unit"):
-        cell_lines = wrap_lines(draw, person["cell_unit"], cell_font, text_max_w)
-        for line in cell_lines[:2]:
-            draw.text((text_x, cursor_y), line, font=cell_font, fill=(255, 255, 255, 210))
-            bbox = draw.textbbox((0, 0), line, font=cell_font)
-            cursor_y += (bbox[3] - bbox[1]) + 6
-        cursor_y += 14
+        details.append(person["cell_unit"])
+    draw.text((margin, cursor_y + 18), "  •  ".join(details), font=detail_font, fill=(255, 255, 255, 225))
 
-    # Date as its own small glass chip
-    date_text = f"{MONTH_NAMES[person['month']]} {person['day']}"
-    bbox = draw.textbbox((0, 0), date_text, font=date_font)
-    dw, dh = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    chip_pad_x, chip_pad_y = 20, 12
-    chip_box = (text_x, cursor_y, text_x + dw + chip_pad_x * 2, cursor_y + dh + chip_pad_y * 2)
-    base = glass_panel(base, chip_box, radius=chip_box[3] - chip_box[1], blur=16,
-                        tint=(255, 255, 255, 60), border=(255, 255, 255, 160))
-    draw = ImageDraw.Draw(base, "RGBA")
-    draw.text((text_x + chip_pad_x, cursor_y + chip_pad_y - bbox[1]), date_text,
-               font=date_font, fill="white")
-
-    # dot indicators, top-right of frame
-    dot_r = 6
-    dot_gap = 22
-    dots_w = total * dot_gap
-    dot_start_x = WIDTH - margin - dots_w
-    dot_y = 50
-    for i in range(total):
-        cx = dot_start_x + i * dot_gap
-        if i == index:
-            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), fill="#FFE066")
-        else:
-            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r),
-                          outline=(255, 255, 255, 200), width=2)
+    # A simple progress line is clearer from a distance than many small dots.
+    progress_y = 66
+    progress_x = WIDTH - margin - 260
+    draw.rounded_rectangle((progress_x, progress_y, progress_x + 260, progress_y + 8), radius=4,
+                           fill=(255, 255, 255, 90))
+    progress_w = max(18, int(260 * (index + 1) / total))
+    draw.rounded_rectangle((progress_x, progress_y, progress_x + progress_w, progress_y + 8), radius=4,
+                           fill="#FFE08A")
 
     base.convert("RGB").save(out_path, quality=95)
 
@@ -575,17 +585,58 @@ def get_audio_duration(path):
 
 def build_clip(image_path, audio_path, out_path):
     duration = get_audio_duration(audio_path) + SLIDE_SECONDS_PADDING
+    motion_filter = (
+        "zoompan=z='min(zoom+0.0012,1.06)':"
+        "x='iw/2-(iw/zoom/2)+sin(on/120)*35':"
+        "y='ih/2-(ih/zoom/2)+cos(on/150)*18':"
+        "d=1:s=1920x1080:fps=30,"
+        "drawbox=x='(iw+360)*mod(t,8)/8-360':y=0:w=180:h=ih:"
+        "color=FFE08A@0.12:t=fill,"
+        f"fade=t=in:st=0:d={FADE_SECONDS},"
+        f"fade=t=out:st={duration - FADE_SECONDS}:d={FADE_SECONDS}"
+    )
     subprocess.run([
         FFMPEG, "-y",
         "-loop", "1", "-i", str(image_path),
         "-i", str(audio_path),
-        "-vf", f"fade=t=in:st=0:d={FADE_SECONDS},fade=t=out:st={duration - FADE_SECONDS}:d={FADE_SECONDS}",
+        "-vf", motion_filter,
         "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
-        "-b:a", "192k", "-pix_fmt", "yuv420p",
+        "-b:a", "192k", "-ar", "44100", "-ac", "2", "-pix_fmt", "yuv420p",
         "-t", str(duration),
         "-shortest",
         str(out_path)
     ], check=True, capture_output=True)
+
+
+def make_title_slide(month_label, total, out_path):
+    base = make_gradient((WIDTH, HEIGHT), "#10243A", "#D28B42", vertical=False).convert("RGBA")
+    draw = ImageDraw.Draw(base, "RGBA")
+    draw_confetti(draw, count=85, seed=total * 17)
+    title_font = ImageFont.truetype(FONT_BOLD, 112)
+    subtitle_font = ImageFont.truetype(FONT_MEDIUM, 42)
+    title = f"{month_label.upper()} BIRTHDAYS"
+    bbox = draw.textbbox((0, 0), title, font=title_font)
+    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 360), title, font=title_font, fill="white")
+    subtitle = f"Celebrating {total} special {'' if total == 1 else 'people'}"
+    bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
+    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 510), subtitle, font=subtitle_font, fill="#FFE08A")
+    draw.line((WIDTH // 2 - 120, 590, WIDTH // 2 + 120, 590), fill="#FFE08A", width=5)
+    base.convert("RGB").save(out_path, quality=95)
+
+
+def make_closing_slide(month_label, out_path):
+    base = make_gradient((WIDTH, HEIGHT), "#D28B42", "#10243A", vertical=False).convert("RGBA")
+    draw = ImageDraw.Draw(base, "RGBA")
+    draw_confetti(draw, count=85, seed=91)
+    title_font = ImageFont.truetype(FONT_BOLD, 92)
+    subtitle_font = ImageFont.truetype(FONT_MEDIUM, 40)
+    title = "MAY YOUR YEAR BE FILLED WITH JOY"
+    bbox = draw.textbbox((0, 0), title, font=title_font)
+    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 365), title, font=title_font, fill="white")
+    subtitle = f"Happy birthday, {month_label} celebrants"
+    bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
+    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 505), subtitle, font=subtitle_font, fill="#FFE08A")
+    base.convert("RGB").save(out_path, quality=95)
 
 
 def concat_clips(clip_paths, out_path):
@@ -613,11 +664,14 @@ def main():
     parser.add_argument("--credentials", default="service_account.json",
                          help="Path to the Google service-account JSON key (only needed with --sheet-id)")
     parser.add_argument("--month", default=None, help="Month name or number (default: current month)")
+    parser.add_argument("--months", default=None,
+                        help="Comma-separated months for one combined video, e.g. July,August,September")
     parser.add_argument("--out", default=None, help="Output MP4 filename")
     args = parser.parse_args()
 
-    target_month = month_to_number(args.month) if args.month else datetime.now().month
-    month_label = MONTH_NAMES[target_month]
+    target_months = parse_months(args.month, args.months)
+    month_label = (MONTH_NAMES[target_months[0]] if len(target_months) == 1 else
+                   f"{MONTH_NAMES[target_months[0]]} - {MONTH_NAMES[target_months[-1]]}")
 
     for d in (SLIDES_DIR, AUDIO_DIR, CLIPS_DIR, OUTPUT_DIR):
         d.mkdir(parents=True, exist_ok=True)
@@ -630,11 +684,11 @@ def main():
             sheet_id=args.sheet_id,
             worksheet_name=args.worksheet,
             credentials_path=args.credentials,
-            target_month=target_month,
+            target_months=target_months,
             photos_dir=photos_dir,
         )
     else:
-        people = load_celebrants(args.csv, target_month)
+        people = load_celebrants(args.csv, target_months=target_months)
     if not people:
         print(f"No celebrants found for {month_label}. Check your CSV file.")
         sys.exit(1)
@@ -642,6 +696,14 @@ def main():
     print(f"Building slideshow for {month_label} ({len(people)} celebrant(s))...")
 
     clip_paths = []
+    title_slide = SLIDES_DIR / "title.png"
+    title_audio = AUDIO_DIR / "title.mp3"
+    title_clip = CLIPS_DIR / "title.mp4"
+    make_title_slide(month_label, len(people), title_slide)
+    synthesize_silence(title_audio, seconds=4)
+    build_clip(title_slide, title_audio, title_clip)
+    clip_paths.append(title_clip)
+
     for i, person in enumerate(people):
         print(f"[{i+1}/{len(people)}] {person['name']} - {month_label} {person['day']}")
         slide_path = SLIDES_DIR / f"slide_{i:03d}.png"
@@ -652,6 +714,14 @@ def main():
         make_narration(person, audio_path)
         build_clip(slide_path, audio_path, clip_path)
         clip_paths.append(clip_path)
+
+    closing_slide = SLIDES_DIR / "closing.png"
+    closing_audio = AUDIO_DIR / "closing.mp3"
+    closing_clip = CLIPS_DIR / "closing.mp4"
+    make_closing_slide(month_label, closing_slide)
+    synthesize_silence(closing_audio, seconds=4)
+    build_clip(closing_slide, closing_audio, closing_clip)
+    clip_paths.append(closing_clip)
 
     out_name = args.out or f"birthday_slideshow_{month_label}.mp4"
     out_path = OUTPUT_DIR / out_name

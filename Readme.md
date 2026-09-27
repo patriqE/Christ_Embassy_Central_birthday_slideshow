@@ -14,15 +14,18 @@ Google Form.
 2. Filters down to whoever was born in the current month (or any month you specify)
 3. Sorts them in ascending order by day (1st → 31st)
 4. Downloads each person's uploaded photo directly from Google Drive
-5. Generates a designed slide per person — big photo, name, cell group, birth date
-6. Generates spoken narration per person — *"Happy birthday to [Name], from [Cell Group], born on [Month] [Day]"*
-7. Stitches everything into a single downloadable `.mp4` video with transitions
+5. Generates a projector-friendly full-screen slide per person — complete photo,
+   name, cell group, birth date, and a celebratory lower third
+6. Generates spoken narration per person — _"Happy birthday to [Name], from [Cell Group], born on [Month] [Day]"_
+7. Adds an opening title, closing blessing, fades, and gentle cinematic motion
+8. Stitches everything into a single downloadable `.mp4` video with transitions
 
 ## Example slide
 
-A large full-bleed photo (or a bold color block with initials if no photo
-was uploaded) on one side, with the celebrant's name, cell group, and date
-on the other.
+A complete photo is preserved inside a full-screen cinematic frame. A blurred
+version of the same photo fills the background so portrait and landscape images
+fit without cutting off faces. The lower third carries the celebrant's name,
+cell group, and date in large projector-friendly type.
 
 ## Requirements
 
@@ -47,21 +50,31 @@ Full step-by-step walkthrough (including the Google Cloud setup) is in
 ## Usage
 
 Build the slideshow for the current month:
+
 ```bash
 python birthday_slideshow.py --sheet-id YOUR_GOOGLE_SHEET_ID
 ```
 
 Build a specific month instead:
+
 ```bash
 python birthday_slideshow.py --sheet-id YOUR_GOOGLE_SHEET_ID --month August
 ```
 
+Build several months into one video:
+
+```bash
+python birthday_slideshow.py --sheet-id YOUR_GOOGLE_SHEET_ID --months July,August,September --out birthday_slideshow_July_to_September.mp4
+```
+
 Use a local CSV instead of a live Google Sheet:
+
 ```bash
 python birthday_slideshow.py --csv celebrants.csv --month July
 ```
 
-The finished video is saved to `output/birthday_slideshow_<Month>.mp4`.
+The finished video is saved to `output/birthday_slideshow_<Month>.mp4`, or to the
+filename supplied with `--out`.
 
 ## Configuration
 
@@ -79,14 +92,17 @@ COLUMN_MAP = {
 ```
 
 Other tunables live in `birthday_slideshow.py`:
-- `PHOTO_FRACTION` — how much of the frame the photo occupies (default `0.62`)
+
 - `BG_COLORS` — the gradient color pairs slides cycle through
 - `SLIDE_SECONDS_PADDING` / `FADE_SECONDS` — pacing and transition timing
+- The video includes a subtle Ken Burns-style zoom on each slide. Background
+  music can be added later as a separate audio layer.
 
 ## Voice narration
 
 Tries each of these in order, so it always produces a working video even
 without internet:
+
 1. **gTTS** — natural Google voices, requires internet
 2. **pyttsx3** — fully offline, uses your OS's built-in voice
 3. Silent slide — last-resort fallback

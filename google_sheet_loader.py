@@ -141,12 +141,13 @@ def month_to_number(value: str) -> int:
 
 
 def load_celebrants_from_sheet(sheet_id, worksheet_name, credentials_path,
-                                target_month, photos_dir):
+                                target_month=None, photos_dir=None, target_months=None):
     """
     Returns a list of dicts: {name, day, month, cell_unit, photo}
     matching the same shape birthday_slideshow.py expects from the CSV,
-    but filtered to target_month and with photo already downloaded locally.
+    but filtered to target_month(s) and with photo already downloaded locally.
     """
+    selected_months = set(target_months or ([target_month] if target_month else []))
     photos_dir = Path(photos_dir)
     photos_dir.mkdir(parents=True, exist_ok=True)
 
@@ -206,7 +207,7 @@ def load_celebrants_from_sheet(sheet_id, worksheet_name, credentials_path,
             skip_reasons.append(f"Row {row_num} ({name}): month value {raw_month!r} not recognized - skipped")
             continue
 
-        if month != target_month:
+        if month not in selected_months:
             continue
 
         cell_unit = str(row.get(resolved["cell_unit"], "")).strip()
@@ -233,5 +234,5 @@ def load_celebrants_from_sheet(sheet_id, worksheet_name, credentials_path,
         for reason in skip_reasons:
             print(f"  - {reason}")
 
-    people.sort(key=lambda p: p["day"])
+    people.sort(key=lambda p: (p["month"], p["day"]))
     return people
