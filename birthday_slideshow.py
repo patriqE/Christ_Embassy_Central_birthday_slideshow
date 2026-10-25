@@ -31,6 +31,9 @@ import requests
 import subprocess
 import sys
 import calendar
+import math
+import random
+import wave
 from datetime import datetime
 from pathlib import Path
 
@@ -130,6 +133,7 @@ setup_fonts()
 WIDTH, HEIGHT = 1920, 1080
 SLIDE_SECONDS_PADDING = 1.0          # extra seconds after narration finishes
 FADE_SECONDS = 0.6                   # crossfade-in length per slide
+APPLAUSE_SECONDS = 2.4               # brief applause after each celebrant
 BG_COLORS = [("#FF6B6B", "#FFD93D"), ("#6BCB77", "#4D96FF"),
              ("#F783AC", "#9775FA"), ("#FFA94D", "#FF6B9D")]  # gradient pairs, cycled
 # Use local fonts folder instead of system paths
@@ -573,6 +577,53 @@ def make_narration(person, out_path_mp3):
     synthesize_silence(out_path_mp3, seconds=3)
 
 
+def make_applause(out_path_mp3, seconds=APPLAUSE_SECONDS):
+    """Create a soft, short applause bed without requiring a bundled audio file."""
+    sample_rate = 44100
+    total_samples = int(sample_rate * seconds)
+    rng = random.Random(42)
+    samples = [0.0] * total_samples
+
+    # Overlapping broadband bursts approximate a small room's applause.
+    for start in range(0, total_samples, int(sample_rate * 0.16)):
+        for _ in range(3):
+            offset = rng.randint(0, int(sample_rate * 0.13))
+            burst_start = start + offset
+            burst_length = rng.randint(int(sample_rate * 0.045), int(sample_rate * 0.11))
+            for index in range(burst_length):
+                position = burst_start + index
+                if position >= total_samples:
+                    break
+                envelope = math.exp(-5.0 * index / burst_length)
+                samples[position] += rng.uniform(-1.0, 1.0) * envelope * 0.16
+
+    pcm = bytearray()
+    for sample in samples:
+        value = max(-1.0, min(1.0, sample))
+        packed = int(value * 32767).to_bytes(2, byteorder="little", signed=True)
+        pcm.extend(packed)
+        pcm.extend(packed)
+
+    wav_path = out_path_mp3.with_suffix(".wav")
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm)
+    subprocess.run([FFMPEG, "-y", "-i", str(wav_path), "-af", "aecho=0.7:0.8:70:0.18",
+                    str(out_path_mp3)], check=True, capture_output=True)
+    wav_path.unlink(missing_ok=True)
+
+
+def append_audio(first_path, second_path, out_path):
+    """Join narration and applause while keeping one continuous audio track."""
+    subprocess.run([
+        FFMPEG, "-y", "-i", str(first_path), "-i", str(second_path),
+        "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a]",
+        "-map", "[a]", "-c:a", "libmp3lame", "-b:a", "192k", str(out_path)
+    ], check=True, capture_output=True)
+
+
 # --------------------------------------------------------------------------
 # VIDEO ASSEMBLY (ffmpeg)
 # --------------------------------------------------------------------------
@@ -584,8 +635,9 @@ def get_audio_duration(path):
     return float(result.stdout.strip())
 
 
-def build_clip(image_path, audio_path, out_path):
+def build_clip(image_path, audio_path, out_path, opening=False):
     duration = get_audio_duration(audio_path) + SLIDE_SECONDS_PADDING
+    opening_effect = "eq=contrast=1.03:brightness=0.02," if opening else ""
     motion_filter = (
         "zoompan=z='min(zoom+0.0012,1.06)':"
         "x='iw/2-(iw/zoom/2)+sin(on/120)*35':"
@@ -593,6 +645,7 @@ def build_clip(image_path, audio_path, out_path):
         "d=1:s=1920x1080:fps=30,"
         "drawbox=x='(iw+360)*mod(t,8)/8-360':y=0:w=180:h=ih:"
         "color=FFE08A@0.12:t=fill,"
+    ) + opening_effect + (
         f"fade=t=in:st=0:d={FADE_SECONDS},"
         f"fade=t=out:st={duration - FADE_SECONDS}:d={FADE_SECONDS}"
     )
@@ -619,7 +672,7 @@ def make_title_slide(month_label, total, out_path):
     else:
         base = make_gradient((WIDTH, HEIGHT), "#10243A", "#D28B42", vertical=False).convert("RGBA")
     draw = ImageDraw.Draw(base, "RGBA")
-    draw_confetti(draw, count=85, seed=total * 17)
+    draw_confetti(draw, count=45, seed=total * 17)
     church_font = ImageFont.truetype(FONT_BOLD, 92)
     location_font = ImageFont.truetype(FONT_MEDIUM, 48)
     range_font = ImageFont.truetype(FONT_BOLD, 62)
@@ -715,18 +768,23 @@ def main():
     title_clip = CLIPS_DIR / "title.mp4"
     make_title_slide(month_label, len(people), title_slide)
     synthesize_silence(title_audio, seconds=4)
-    build_clip(title_slide, title_audio, title_clip)
+    build_clip(title_slide, title_audio, title_clip, opening=True)
     clip_paths.append(title_clip)
+
+    applause_path = AUDIO_DIR / "applause.mp3"
+    make_applause(applause_path)
 
     for i, person in enumerate(people):
         print(f"[{i+1}/{len(people)}] {person['name']} - {month_label} {person['day']}")
         slide_path = SLIDES_DIR / f"slide_{i:03d}.png"
         audio_path = AUDIO_DIR / f"audio_{i:03d}.mp3"
+        full_audio_path = AUDIO_DIR / f"audio_{i:03d}_with_applause.mp3"
         clip_path = CLIPS_DIR / f"clip_{i:03d}.mp4"
 
         make_slide(person, i, len(people), slide_path)
         make_narration(person, audio_path)
-        build_clip(slide_path, audio_path, clip_path)
+        append_audio(audio_path, applause_path, full_audio_path)
+        build_clip(slide_path, full_audio_path, clip_path)
         clip_paths.append(clip_path)
 
     closing_slide = SLIDES_DIR / "closing.png"
