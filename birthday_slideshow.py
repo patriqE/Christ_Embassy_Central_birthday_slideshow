@@ -133,7 +133,7 @@ setup_fonts()
 WIDTH, HEIGHT = 1920, 1080
 SLIDE_SECONDS_PADDING = 1.0          # extra seconds after narration finishes
 FADE_SECONDS = 0.6                   # crossfade-in length per slide
-APPLAUSE_SECONDS = 2.4               # brief applause after each celebrant
+APPLAUSE_SECONDS = 4.0               # applause and cheers after each celebrant
 BG_COLORS = [("#FF6B6B", "#FFD93D"), ("#6BCB77", "#4D96FF"),
              ("#F783AC", "#9775FA"), ("#FFA94D", "#FF6B9D")]  # gradient pairs, cycled
 # Use local fonts folder instead of system paths
@@ -148,6 +148,7 @@ AUDIO_DIR = WORKDIR / "_build" / "audio"
 CLIPS_DIR = WORKDIR / "_build" / "clips"
 OUTPUT_DIR = WORKDIR / "output"
 OPENING_BACKGROUND = WORKDIR / "assets" / "branding" / "opening_background.jpg"
+APPLAUSE_ASSET = WORKDIR / "assets" / "audio" / "AI_Cheers and Applause 2 Sound Effects.mp3"
 
 MONTH_NAMES = list(calendar.month_name)  # index 1-12
 
@@ -420,95 +421,7 @@ def open_oriented_photo(path):
         return source.convert("RGB")
 
 
-def make_slide(person, index, total, out_path):
-    c1, c2 = BG_COLORS[index % len(BG_COLORS)]
-    has_photo = bool(person["photo"] and os.path.exists(person["photo"]))
-
-    if has_photo:
-        photo = open_oriented_photo(person["photo"])
-        # Preserve the complete photo. The blurred cover backdrop fills the
-        # projector frame while the sharp photo is fitted inside it without cropping.
-        backdrop = cover_crop(photo, WIDTH, HEIGHT).filter(ImageFilter.GaussianBlur(46))
-        base = backdrop.convert("RGBA")
-        base.alpha_composite(Image.new("RGBA", (WIDTH, HEIGHT), (8, 12, 20, 105)))
-        fitted = contain_fit(photo, WIDTH - 150, HEIGHT - 170).convert("RGBA")
-        fx = (WIDTH - fitted.width) // 2
-        fy = 42 + max(0, (HEIGHT - 84 - fitted.height) // 2)
-        photo_shadow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-        ImageDraw.Draw(photo_shadow).rectangle(
-            (fx + 12, fy + 14, fx + fitted.width + 12, fy + fitted.height + 14),
-            fill=(0, 0, 0, 115))
-        base.alpha_composite(photo_shadow.filter(ImageFilter.GaussianBlur(22)))
-        base.alpha_composite(fitted, (fx, fy))
-        draw_photo = ImageDraw.Draw(base, "RGBA")
-        draw_photo.rectangle((fx, fy, fx + fitted.width - 1, fy + fitted.height - 1),
-                             outline=(255, 255, 255, 175), width=3)
-    else:
-        base = make_gradient((WIDTH, HEIGHT), c1, c2, vertical=True).convert("RGBA")
-        draw0 = ImageDraw.Draw(base, "RGBA")
-        initials = "".join(w[0].upper() for w in person["name"].split()[:2])
-        big_font = ImageFont.truetype(FONT_BOLD, 520)
-        bbox = draw0.textbbox((0, 0), initials, font=big_font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        draw0.text((WIDTH - tw - 80 - bbox[0], 70 - bbox[1]), initials, font=big_font,
-                   fill=(255, 255, 255, 45))
-
-    draw = ImageDraw.Draw(base, "RGBA")
-    margin = 76
-
-    # A dark lower gradient keeps projector text readable without covering the photo.
-    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    overlay_draw = ImageDraw.Draw(overlay, "RGBA")
-    for y in range(HEIGHT // 2, HEIGHT):
-        alpha = int(18 + 175 * ((y - HEIGHT // 2) / (HEIGHT // 2)))
-        overlay_draw.line((0, y, WIDTH, y), fill=(12, 16, 24, alpha))
-    base.alpha_composite(overlay)
-
-    # Small gold accents make the layout feel celebratory without becoming busy.
-    draw = ImageDraw.Draw(base, "RGBA")
-    draw.ellipse((WIDTH - 150, 76, WIDTH - 128, 98), fill="#FFE08A")
-    draw.ellipse((WIDTH - 112, 58, WIDTH - 98, 72), fill=(255, 255, 255, 190))
-    draw.polygon([(WIDTH - 220, 138), (WIDTH - 212, 158), (WIDTH - 192, 166),
-                  (WIDTH - 212, 174), (WIDTH - 220, 194), (WIDTH - 228, 174),
-                  (WIDTH - 248, 166), (WIDTH - 228, 158)], fill=(255, 224, 138, 210))
-    draw.ellipse((WIDTH - 286, 112, WIDTH - 274, 124), fill=(255, 255, 255, 170))
-    draw.line((margin, HEIGHT - 80, margin + 150, HEIGHT - 80), fill="#FFE08A", width=5)
-
-    banner_font = ImageFont.truetype(FONT_MEDIUM, 28)
-    name_font, name_lines = fit_multiline(draw, person["name"], FONT_BOLD, WIDTH - margin * 2,
-                                           start_size=78, min_size=42, max_lines=2)
-    detail_font = ImageFont.truetype(FONT_REGULAR, 30)
-    date_font = ImageFont.truetype(FONT_MEDIUM, 34)
-    cursor_y = HEIGHT - 330
-
-    month_text = f"{MONTH_NAMES[person['month']].upper()} BIRTHDAYS"
-    draw.text((margin, cursor_y), month_text, font=banner_font, fill="#FFE08A")
-    cursor_y += 48
-    draw.text((margin, cursor_y), "HAPPY BIRTHDAY", font=banner_font, fill=(255, 255, 255, 205))
-    cursor_y += 46
-    for line in name_lines:
-        glow_text(base, (margin, cursor_y), line, name_font, glow_color=(255, 255, 255, 70), radius=10)
-        draw = ImageDraw.Draw(base, "RGBA")
-        draw.text((margin, cursor_y), line, font=name_font, fill="white")
-        bbox = draw.textbbox((0, 0), line, font=name_font)
-        cursor_y += bbox[3] - bbox[1] + 4
-
-    details = [f"{MONTH_NAMES[person['month']]} {person['day']}"]
-    if person.get("cell_unit"):
-        details.append(person["cell_unit"])
-    draw.text((margin, cursor_y + 18), "  •  ".join(details), font=detail_font, fill=(255, 255, 255, 225))
-
-    # A simple progress line is clearer from a distance than many small dots.
-    progress_y = 66
-    progress_x = WIDTH - margin - 260
-    draw.rounded_rectangle((progress_x, progress_y, progress_x + 260, progress_y + 8), radius=4,
-                           fill=(255, 255, 255, 90))
-    progress_w = max(18, int(260 * (index + 1) / total))
-    draw.rounded_rectangle((progress_x, progress_y, progress_x + progress_w, progress_y + 8), radius=4,
-                           fill="#FFE08A")
-
-    base.convert("RGB").save(out_path, quality=95)
-
+from celebration_design import make_slide, make_title_slide, make_closing_slide
 
 
 # --------------------------------------------------------------------------
@@ -578,31 +491,59 @@ def make_narration(person, out_path_mp3):
 
 
 def make_applause(out_path_mp3, seconds=APPLAUSE_SECONDS):
-    """Create a soft, short applause bed without requiring a bundled audio file."""
+    """Create a lively applause-and-cheer bed without requiring a bundled audio file."""
+    if APPLAUSE_ASSET.exists():
+        fade_out_start = max(0.0, seconds - 0.35)
+        subprocess.run([
+            FFMPEG, "-y", "-i", str(APPLAUSE_ASSET), "-t", str(seconds),
+            "-af", f"afade=t=in:st=0:d=0.08,afade=t=out:st={fade_out_start}:d=0.35,"
+                   "loudnorm=I=-16:TP=-1.5:LRA=7,alimiter=limit=0.95",
+            str(out_path_mp3)
+        ], check=True, capture_output=True)
+        print(f"  [celebration audio: {APPLAUSE_ASSET.name}]")
+        return
+
     sample_rate = 44100
     total_samples = int(sample_rate * seconds)
     rng = random.Random(42)
-    samples = [0.0] * total_samples
+    left = [0.0] * total_samples
+    right = [0.0] * total_samples
 
-    # Overlapping broadband bursts approximate a small room's applause.
-    for start in range(0, total_samples, int(sample_rate * 0.16)):
-        for _ in range(3):
-            offset = rng.randint(0, int(sample_rate * 0.13))
-            burst_start = start + offset
-            burst_length = rng.randint(int(sample_rate * 0.045), int(sample_rate * 0.11))
-            for index in range(burst_length):
-                position = burst_start + index
-                if position >= total_samples:
-                    break
-                envelope = math.exp(-5.0 * index / burst_length)
-                samples[position] += rng.uniform(-1.0, 1.0) * envelope * 0.16
+    # Many independent clap transients sound fuller than one repeating noise burst.
+    for _ in range(18):
+        clap_count = rng.randint(5, 8)
+        for _ in range(clap_count):
+            start = rng.randint(0, total_samples - int(sample_rate * 0.1))
+            length = rng.randint(int(sample_rate * 0.035), int(sample_rate * 0.085))
+            pan = rng.uniform(0.25, 0.75)
+            for index in range(length):
+                position = start + index
+                attack = min(1.0, index / (sample_rate * 0.004))
+                envelope = attack * math.exp(-7.0 * index / length)
+                snap = rng.uniform(-1.0, 1.0) * envelope * 0.42
+                resonance = math.sin(index * rng.uniform(0.035, 0.055)) * envelope * 0.07
+                left[position] += (snap + resonance) * (1.0 - pan)
+                right[position] += (snap + resonance) * pan
+
+    # A rising, textured vocal bed gives the applause the feeling of joyful cheering.
+    for index in range(total_samples):
+        time = index / sample_rate
+        swell = 0.58 + 0.42 * math.sin(math.pi * min(1.0, time / seconds))
+        voice = (
+            math.sin(2 * math.pi * 235 * time + math.sin(time * 5.5) * 0.8) * 0.055 +
+            math.sin(2 * math.pi * 317 * time + math.sin(time * 4.1) * 0.6) * 0.04 +
+            rng.uniform(-1.0, 1.0) * 0.075
+        ) * swell
+        left[index] += voice * 0.82
+        right[index] += voice
 
     pcm = bytearray()
-    for sample in samples:
-        value = max(-1.0, min(1.0, sample))
-        packed = int(value * 32767).to_bytes(2, byteorder="little", signed=True)
-        pcm.extend(packed)
-        pcm.extend(packed)
+    peak = max(1.0, max(max(abs(value) for value in left), max(abs(value) for value in right)))
+    for left_sample, right_sample in zip(left, right):
+        left_value = int(max(-1.0, min(1.0, left_sample / peak * 1.65)) * 32767)
+        right_value = int(max(-1.0, min(1.0, right_sample / peak * 1.65)) * 32767)
+        pcm.extend(left_value.to_bytes(2, byteorder="little", signed=True))
+        pcm.extend(right_value.to_bytes(2, byteorder="little", signed=True))
 
     wav_path = out_path_mp3.with_suffix(".wav")
     with wave.open(str(wav_path), "wb") as wav_file:
@@ -610,7 +551,9 @@ def make_applause(out_path_mp3, seconds=APPLAUSE_SECONDS):
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(pcm)
-    subprocess.run([FFMPEG, "-y", "-i", str(wav_path), "-af", "aecho=0.7:0.8:70:0.18",
+    subprocess.run([FFMPEG, "-y", "-i", str(wav_path), "-af",
+                    "loudnorm=I=-16:TP=-1.5:LRA=7,aecho=0.7:0.8:75:0.22,"
+                    "volume=2.5,alimiter=limit=0.95",
                     str(out_path_mp3)], check=True, capture_output=True)
     wav_path.unlink(missing_ok=True)
 
@@ -637,15 +580,12 @@ def get_audio_duration(path):
 
 def build_clip(image_path, audio_path, out_path, opening=False):
     duration = get_audio_duration(audio_path) + SLIDE_SECONDS_PADDING
-    opening_effect = "eq=contrast=1.03:brightness=0.02," if opening else ""
+    # Preserve the composition and photo edges; only opening cards gently zoom.
     motion_filter = (
-        "zoompan=z='min(zoom+0.0012,1.06)':"
-        "x='iw/2-(iw/zoom/2)+sin(on/120)*35':"
-        "y='ih/2-(ih/zoom/2)+cos(on/150)*18':"
-        "d=1:s=1920x1080:fps=30,"
-        "drawbox=x='(iw+360)*mod(t,8)/8-360':y=0:w=180:h=ih:"
-        "color=FFE08A@0.12:t=fill,"
-    ) + opening_effect + (
+        "zoompan=z='min(1+on*0.00012,1.018)':"
+        "x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s=1920x1080:fps=30,"
+        if opening else "fps=30,"
+    ) + (
         f"fade=t=in:st=0:d={FADE_SECONDS},"
         f"fade=t=out:st={duration - FADE_SECONDS}:d={FADE_SECONDS}"
     )
@@ -657,53 +597,10 @@ def build_clip(image_path, audio_path, out_path, opening=False):
         "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
         "-b:a", "192k", "-ar", "44100", "-ac", "2", "-pix_fmt", "yuv420p",
         "-t", str(duration),
-        "-shortest",
+        "-af", "apad",
+        "-movflags", "+faststart",
         str(out_path)
     ], check=True, capture_output=True)
-
-
-def make_title_slide(month_label, total, out_path):
-    if OPENING_BACKGROUND.exists():
-        base = cover_crop(Image.open(OPENING_BACKGROUND).convert("RGB"), WIDTH, HEIGHT).convert("RGBA")
-        # Paint over the template wording while preserving the decorative frame.
-        draw_cover = ImageDraw.Draw(base, "RGBA")
-        draw_cover.rounded_rectangle((535, 205, 1485, 855), radius=18,
-                                     fill=(166, 195, 195, 235))
-    else:
-        base = make_gradient((WIDTH, HEIGHT), "#10243A", "#D28B42", vertical=False).convert("RGBA")
-    draw = ImageDraw.Draw(base, "RGBA")
-    draw_confetti(draw, count=45, seed=total * 17)
-    church_font = ImageFont.truetype(FONT_BOLD, 92)
-    location_font = ImageFont.truetype(FONT_MEDIUM, 48)
-    range_font = ImageFont.truetype(FONT_BOLD, 62)
-    count_font = ImageFont.truetype(FONT_MEDIUM, 42)
-
-    def centered(text, font, y, fill):
-        bbox = draw.textbbox((0, 0), text, font=font)
-        draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, y), text, font=font, fill=fill)
-
-    centered("CHRIST EMBASSY", church_font, 300, "white")
-    centered("PARIS CENTRAL", location_font, 420, "#FFE08A")
-    centered(f"{month_label.upper()}", range_font, 520, "white")
-    centered("CELEBRANTS", range_font, 595, "white")
-    centered(f"Celebrating {total} celebrant{'s' if total != 1 else ''}", count_font, 705, "#FFE08A")
-    draw.line((WIDTH // 2 - 150, 790, WIDTH // 2 + 150, 790), fill="#FFE08A", width=5)
-    base.convert("RGB").save(out_path, quality=95)
-
-
-def make_closing_slide(month_label, out_path):
-    base = make_gradient((WIDTH, HEIGHT), "#D28B42", "#10243A", vertical=False).convert("RGBA")
-    draw = ImageDraw.Draw(base, "RGBA")
-    draw_confetti(draw, count=85, seed=91)
-    title_font = ImageFont.truetype(FONT_BOLD, 92)
-    subtitle_font = ImageFont.truetype(FONT_MEDIUM, 40)
-    title = "MAY YOUR YEAR BE FILLED WITH JOY"
-    bbox = draw.textbbox((0, 0), title, font=title_font)
-    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 365), title, font=title_font, fill="white")
-    subtitle = f"Happy birthday, {month_label} celebrants"
-    bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
-    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 505), subtitle, font=subtitle_font, fill="#FFE08A")
-    base.convert("RGB").save(out_path, quality=95)
 
 
 def concat_clips(clip_paths, out_path):

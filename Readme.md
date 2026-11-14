@@ -20,12 +20,27 @@ Google Form.
 7. Adds an opening title, closing blessing, fades, and gentle cinematic motion
 8. Stitches everything into a single downloadable `.mp4` video with transitions
 
-## Example slide
+## Visual design
 
-A complete photo is preserved inside a full-screen cinematic frame. A blurred
-version of the same photo fills the background so portrait and landscape images
-fit without cutting off faces. The lower third carries the celebrant's name,
-cell group, and date in large projector-friendly type.
+The default design pairs warm cream with plum, forest, and indigo portrait
+frames, oversized serif headlines, coral/gold starbursts, and edge confetti.
+Photos remain fully visible in a dedicated area, separate from names and cell
+groups. Missing photos receive a coordinated initials card. Opening and closing
+cards share the same visual language. Celebrant cards stay steady for readability;
+the opener has a subtle zoom, and all cards fade in and out.
+
+Render an offline sample using local photos (the sample dates are illustrative):
+
+```bash
+python preview_design.py
+python preview_design.py --video
+```
+
+Preview images, a contact sheet, and the optional silent MP4 are written to
+`output/design_preview/`. The normal CSV/Sheets workflow uses this same design
+with narration and applause. Edit `celebration_design.py` to adjust palettes,
+layout, or fonts. It uses Georgia/Arial on Windows with local/system fallbacks;
+provide `fonts/Display.ttf` to supply your own display face.
 
 ## Requirements
 
@@ -93,9 +108,9 @@ COLUMN_MAP = {
 
 Other tunables live in `birthday_slideshow.py`:
 
-- `BG_COLORS` — the gradient color pairs slides cycle through
+- `PALETTES` in `celebration_design.py` — portrait and accent colors
 - `SLIDE_SECONDS_PADDING` / `FADE_SECONDS` — pacing and transition timing
-- The video includes a subtle Ken Burns-style zoom on each slide. Background
+- The opening card gently zooms; portrait cards remain steady. Background
   music can be added later as a separate audio layer.
 
 ## Voice narration
