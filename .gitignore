@@ -4,6 +4,7 @@ service_account.json
 # Virtual environment
 venv/
 .venv/
+.preview-venv/
 
 # Generated output (rebuilt fresh each run)
 _build/
