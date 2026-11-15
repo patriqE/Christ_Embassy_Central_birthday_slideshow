@@ -136,7 +136,7 @@ def make_title_slide(month_label, total, out_path):
     text(draw, (98, 492), "Let's celebrate.", 151, dark, serif=True)
     draw.line((112, 711, 235, 711), fill=accent, width=8)
     block(draw, (111, 758), month_label, 1260, 115, 83, dark)
-    text(draw, (114, 922), f"{total:02d} BEAUTIFUL {'LIFE' if total == 1 else 'LIVES'}. ONE CHURCH FAMILY.", 28, dark, bold=True)
+    text(draw, (114, 922), f"{total} BEAUTIFUL {'LIFE' if total == 1 else 'LIVES'}. ONE CHURCH FAMILY.", 28, dark, bold=True)
     # Sculptural orbit and starburst give the opener a celebratory focal point.
     draw.ellipse((1490, 245, 2055, 810), fill=dark)
     draw.arc((1420, 199, 2110, 857), 70, 290, fill=accent, width=9)
