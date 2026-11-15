@@ -33,6 +33,7 @@ import sys
 import calendar
 import math
 import random
+import re
 import wave
 from datetime import datetime
 from pathlib import Path
@@ -179,7 +180,7 @@ def load_celebrants(csv_path: str, target_month: int = None, target_months=None)
             day = int(row["day"].strip())
             month = month_to_number(row["month"])
             photo = (row.get("photo") or "").strip()
-            cell_unit = (row.get("cell_unit") or "").strip()
+            cell_unit = normalize_cell_name(row.get("cell_unit"))
             if month in selected_months:
                 people.append({"name": name, "day": day, "month": month,
                                 "photo": photo or None, "cell_unit": cell_unit or None})
@@ -427,16 +428,18 @@ from celebration_design import make_slide, make_title_slide, make_closing_slide
 # --------------------------------------------------------------------------
 # NARRATION (TTS)
 # --------------------------------------------------------------------------
+def normalize_cell_name(cell_unit):
+    """Ensure the displayed cell name ends with a consistently capitalized Cell."""
+    cell_name = str(cell_unit or "").strip()
+    if not cell_name:
+        return ""
+    if re.search(r"\bcell\s*$", cell_name, re.IGNORECASE):
+        return re.sub(r"\bcell\s*$", "Cell", cell_name, flags=re.IGNORECASE)
+    return f"{cell_name} Cell"
+
+
 def spoken_cell_name(cell_unit):
-    """
-    'Johnson' -> 'Johnson Cell'   (word "cell" not already present, so add it)
-    'Johnson Cell' -> 'Johnson Cell'   (already there, don't double it up)
-    'Cell Group 4 - Grace' -> 'Cell Group 4 - Grace'   (already there, anywhere in the phrase)
-    """
-    import re
-    if re.search(r"\bcell\b", cell_unit, re.IGNORECASE):
-        return cell_unit
-    return f"{cell_unit} Cell"
+    return normalize_cell_name(cell_unit)
 
 
 def narration_text(person):
@@ -625,7 +628,7 @@ def main():
                               "(the long ID in the sheet's URL)")
     parser.add_argument("--worksheet", default=None,
                          help="Worksheet/tab name in the Google Sheet (default: first tab)")
-    parser.add_argument("--credentials", default="service_account.json",
+    parser.add_argument("--credentials", default=str(WORKDIR / "service_account.json"),
                          help="Path to the Google service-account JSON key (only needed with --sheet-id)")
     parser.add_argument("--month", default=None, help="Month name or number (default: current month)")
     parser.add_argument("--months", default=None,
@@ -653,6 +656,8 @@ def main():
         )
     else:
         people = load_celebrants(args.csv, target_months=target_months)
+    for person in people:
+        person["cell_unit"] = normalize_cell_name(person.get("cell_unit"))
     if not people:
         print(f"No celebrants found for {month_label}. Check your CSV file.")
         sys.exit(1)
